@@ -29,6 +29,7 @@ static void place(void *bp, size_t asize);
 // #define FIRST_FIT
 #define NEXT_FIT
 // #define BEST_FIT
+
 /* 
  * Students work in teams of one or two.  Teams enter their team name, 
  * personal names and login IDs in a struct of this

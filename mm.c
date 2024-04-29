@@ -234,7 +234,7 @@ void *mm_realloc(void *ptr, size_t size) // 재할당
             lastp = oldptr; // next_fit 사용을 위한 포인터 동기화
             return oldptr;
         }
-        
+        // else if (!GET_ALLOC(HDRP(PREV_BLKP(oldptr))) && ())
         else // 위 케이스에 모두 해당되지 않아, 결국 malloc을 해야 하는 경우
         {
             newptr = mm_malloc(size + DSIZE); // (할당하려는 크기 + 8 bytes)만큼 새롭게 할당
@@ -253,26 +253,29 @@ void *mm_realloc(void *ptr, size_t size) // 재할당
 /*
 * place
 */
-static void place(void *bp, size_t asize)
+static void place(void *bp, size_t asize) // 배치 및 분할
 {
-    size_t csize = GET_SIZE(HDRP(bp));
+    size_t csize = GET_SIZE(HDRP(bp)); // 입력 포인터가 위치한 블록 사이즈 설정
 
-    if ((csize - asize) >= (2 * DSIZE))
+    if ((csize - asize) >= (2 * DSIZE)) // (블록 사이즈 - 조정할 사이즈)가 16 bytes보다 같거나 클 경우
+                                        // 할당 하고도 공간이 남으니, 분할 작업이 이루어진다
     {
-        PUT(HDRP(bp), PACK(asize, 1));
-        PUT(FTRP(bp), PACK(asize, 1));
-        bp = NEXT_BLKP(bp);
-        PUT(HDRP(bp), PACK(csize - asize, 0));
-        PUT(FTRP(bp), PACK(csize - asize, 0));
+        PUT(HDRP(bp), PACK(asize, 1)); // 입력 포인터가 위치한 블록의 Header block에 [조정할 사이즈, Allocated] 상태 기입
+        PUT(FTRP(bp), PACK(asize, 1)); // 입력 포인터가 위치한 블록의 Footer block에 [조정할 사이즈, Allocated] 상태 기입
+        bp = NEXT_BLKP(bp); // 입력 포인터가 위치한 블록의 다음 블록으로 포인터 변경
+        PUT(HDRP(bp), PACK(csize - asize, 0)); // 입력 포인터가 위치한 블록의 Header block에 [블록 사이즈 - 조정할 사이즈, Free] 상태 기입
+        PUT(FTRP(bp), PACK(csize - asize, 0)); // 입력 포인터가 위치한 블록의 Footer block에 [블록 사이즈 - 조정할 사이즈, Free] 상태 기입
     }
-    else
+    else // (블록 사이즈 - 조정할 사이즈)가 16 bytes보다 작을 경우
+         // 분할작업 X
     {
-        PUT(HDRP(bp), PACK(csize, 1));
-        PUT(FTRP(bp), PACK(csize, 1));
+        PUT(HDRP(bp), PACK(csize, 1)); // 입력 포인터가 위치한 블록의 Header block에 [블록 사이즈 - 조정할 사이즈, Allocated] 상태 기입
+        PUT(FTRP(bp), PACK(csize, 1)); // 입력 포인터가 위치한 블록의 Footer block에 [블록 사이즈 - 조정할 사이즈, Allocated] 상태 기입
     }
 }
+
 /* 
-* find_fit - first fit version
+* find_fit - first fit
 * 요청이 들어오면, 처음부터 계속해서 탐색
 */
 // #ifdef 사용으로, FIT 방식을 define하여 선택
@@ -298,7 +301,7 @@ static void *find_fit(size_t asize)
 #endif
 
 /* 
-* find_fit -  next fit version
+* find_fit - next fit
 * 요청이 들어오면, 이전에 탐색했던 블록 이후부터 탐색
 */
 #ifdef NEXT_FIT
@@ -320,5 +323,29 @@ static void *find_fit(size_t asize)
         }
     }
     return NULL;
+}
+#endif
+
+/*
+* find_fit - best fit
+*/
+#ifdef BEST_FIT
+static void *find_fit(size_t asize)
+{
+    void *bp;
+    void *bestp = NULL;
+    
+    for (bp = heap_listp; GET_SIZE(HDRP(bp)) > 0; bp = NEXT_BLKP(bp))
+    {
+        if (!GET_ALLOC(HDRP(bp)) && (asize <= GET_SIZE(HDRP(bp))))
+        {
+            if (bestp == NULL || GET_SIZE(HDRP(bp)) < GET_SIZE(HDRP(bestp)))
+            {
+                bestp = bp;
+            }
+        }
+    }
+
+    return bestp;
 }
 #endif
