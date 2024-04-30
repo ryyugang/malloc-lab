@@ -47,11 +47,22 @@ team_t team = {
 void *heap_listp; // 힙의 초기 영역을 가리키는 포인터
 void *lastp; // next_fit 방식에 사용하는 포인터
 
+#ifdef Segmented_free_list
+void *SFL[SFLsize + 1]; // Segmented Free list 선언
+#endif
+
 /* 
  * mm_init - initialize the malloc package.
  */
 int mm_init(void)
 {   
+#ifdef Segmented_free_list
+    // Segmented Free list 초기화
+    for (int list = 0 ; list <= SFLsize; list ++)
+    {
+        SFL[list] = NULL;
+    }
+#endif    
 
     if ((heap_listp = mem_sbrk(4*WSIZE)) == (void *) -1)
     {
@@ -105,6 +116,7 @@ static void *extend_heap(size_t words) // 최대 힙 영역을 넘어가지 않�
  */
 void *mm_malloc(size_t size)
 {
+#ifndef Segmented_free_list
     size_t asize; // 할당을 위해 조정할 사이즈
     size_t extendsize; 
     char *bp;
@@ -140,6 +152,34 @@ void *mm_malloc(size_t size)
     place(bp, asize); // 할당 
     lastp = bp; // 포인터 동기화
     return bp;
+#endif
+
+#ifdef Segmented_free_list
+    size_t asize;
+    size_t extendsize;
+    char *bp;
+
+    if (size == 0)
+    {
+        return NULL;
+    }
+
+    asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
+    if ((bp = find_fit(asize)) != NULL)
+    {
+        place(bp, asize);
+        return bp;
+    }
+
+    extendsize = MAX(asize,CHUNKSIZE);
+    if ((bp = extend_heap(extendsize/WSIZE)) == NULL)
+    {
+        return NULL;
+    }
+
+    place(bp, asize);
+    return bp;
+#endif
 }
 
 /*
@@ -164,6 +204,7 @@ static void *coalesce (void *bp) // 분할되어있는 Free block을 병합하�
     size_t next_alloc = GET_ALLOC(HDRP(NEXT_BLKP(bp))); // 다음 블록의 할당여부
     size_t size = GET_SIZE(HDRP(bp)); // 현재 블록 사이즈
 
+#ifndef Segmented_free_list
     if (prev_alloc && next_alloc) // case1 : 이전, 다음 블록 allocated
     {
         return bp; // 병합이 불가능하니, 현재 포인터만 반환
@@ -194,6 +235,44 @@ static void *coalesce (void *bp) // 분할되어있는 Free block을 병합하�
     
     lastp = bp; // next_fit 사용을 위한 포인터 동기화
     return bp;
+#endif
+
+#ifdef Segmented_free_list
+    if (prev_alloc && next_alloc) // case1 : 이전, 다음 블록 allocated
+    {
+        insert_SFL(bp);
+        return bp; // 병합이 불가능하니, 현재 포인터만 반환
+    }
+
+    else if (prev_alloc && !next_alloc) // case2 : 이전 블록 allocated, 다음 블록 free
+    {
+        delete_SFL(NEXT_BLKP(bp));
+        size += GET_SIZE(HDRP(NEXT_BLKP(bp))); // 다음 블록의 사이즈만큼 더해줌
+        PUT(HDRP(bp), PACK(size, 0)); // 현재 블록의 Header block에, Free block의 상태로 기입
+        PUT(FTRP(bp), PACK(size, 0)); // 현재 블록의 Footer block에, Free block의 상태로 기입
+    }
+
+    else if (!prev_alloc && next_alloc) // case3 : 이전 블록 free, 다음 블록 allocated
+    {
+        delete_SFL(PREV_BLKP(bp));
+        size += GET_SIZE(HDRP(PREV_BLKP(bp))); // 이전 블록 사이즈만큼 더해줌
+        PUT(FTRP(bp), PACK(size, 0)); // 현재 블록의 Footer block에, Free block의 상태로 기입
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0)); // 이전 블록의 Header block에, Free block의 상태로 기입
+        bp = PREV_BLKP(bp); // 현재 블록을 가리키는 포인터를, 이전 블록을 가리키는 포인터로 업데이트
+    }
+
+    else // case4 : 이전 블록 free, 다음 블록 free
+    {
+        delete_SFL(NEXT_BLKP(bp));
+        delete_SFL(PREV_BLKP(bp));
+        size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp))); // 이전 + 다음 블록 사이즈만큼 더해줌
+        PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0)); // 현재 블록의 Header block에, Free block의 상태로 기입
+        PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0)); // 다음 블록의 Footer block에, Free block의 상태로 기입
+        bp = PREV_BLKP(bp); // 현재 블록을 가리키는 포인터를, 이전 블록을 가리키는 포인터로 업데이트
+    }
+    insert_SFL(bp);
+    return bp;
+#endif
 }
 
 /*
@@ -201,6 +280,7 @@ static void *coalesce (void *bp) // 분할되어있는 Free block을 병합하�
  */
 void *mm_realloc(void *ptr, size_t size) // 재할당
 {
+#ifndef Segmented_free_list
     if (ptr == NULL) // 입력 포인터가 NULL이면, 입력 사이즈만큼 새롭게 할당 (예외처리)
     {
         return mm_malloc(size);
@@ -248,19 +328,19 @@ void *mm_realloc(void *ptr, size_t size) // 재할당
             lastp = prev_ptr; // next_fit 사용을 위한 포인터 동기화
             return prev_ptr;
         }
-        // else if (!GET_ALLOC(HDRP(NEXT_BLKP(oldptr))) && !GET_ALLOC(HDRP(PREV_BLKP(oldptr))) && (size + DSIZE <= next_size + copySize + prev_size))
-        // // 이전 블록과 다음 블록이 모두 Free block, (재할당 하려는 블록의 사이즈 + 8 bytes) <= (이전 블록 사이즈 + 현재 블록 사이즈 + 다음 블록 사이즈)
-        // // 이전 블록과 현재 블록과 다음 블록을 하나의 블록으로 취급해도 크기의 문제가 발생하지 않음
-        // // malloc을 하지 않아도 됨 -> 메모리 공간 및 시간적 이득을 어등ㄹ 수 있음
-        // {
-        //     void *prev_ptr = PREV_BLKP(oldptr); // 이전 블록의 bp
+        else if (!GET_ALLOC(HDRP(NEXT_BLKP(oldptr))) && !GET_ALLOC(HDRP(PREV_BLKP(oldptr))) && (size + DSIZE <= next_size + copySize + prev_size))
+        // 이전 블록과 다음 블록이 모두 Free block, (재할당 하려는 블록의 사이즈 + 8 bytes) <= (이전 블록 사이즈 + 현재 블록 사이즈 + 다음 블록 사이즈)
+        // 이전 블록과 현재 블록과 다음 블록을 하나의 블록으로 취급해도 크기의 문제가 발생하지 않음
+        // malloc을 하지 않아도 됨 -> 메모리 공간 및 시간적 이득을 어등ㄹ 수 있음
+        {
+            void *prev_ptr = PREV_BLKP(oldptr); // 이전 블록의 bp
 
-        //     memmove(prev_ptr, oldptr, copySize); // 이전 블록의 bp로 현재 block의 메모리 영역을 옮긴다
-        //     PUT(HDRP(prev_ptr), PACK(prev_size + copySize + next_size, 1)); // 이전 블록의 Header Block에, (이전 블록 사이즈 + 현재 블록 사이즈 + 다음 블록 사이즈) 크기와 Allocated 상태 기입
-        //     PUT(FTRP(prev_ptr), PACK(prev_size + copySize + next_size, 1)); // 이전 블록의 Footer Block에, (이전 블록 사이즈 + 현재 블록 사이즈 + 다음 블록 사이즈) 크기와 Allocated 상태 기입
-        //     lastp = prev_ptr; // next_fit 사용을 위한 포인터 동기화
-        //     return prev_ptr;
-        // }
+            memmove(prev_ptr, oldptr, copySize); // 이전 블록의 bp로 현재 block의 메모리 영역을 옮긴다
+            PUT(HDRP(prev_ptr), PACK(prev_size + copySize + next_size, 1)); // 이전 블록의 Header Block에, (이전 블록 사이즈 + 현재 블록 사이즈 + 다음 블록 사이즈) 크기와 Allocated 상태 기입
+            PUT(FTRP(prev_ptr), PACK(prev_size + copySize + next_size, 1)); // 이전 블록의 Footer Block에, (이전 블록 사이즈 + 현재 블록 사이즈 + 다음 블록 사이즈) 크기와 Allocated 상태 기입
+            lastp = prev_ptr; // next_fit 사용을 위한 포인터 동기화
+            return prev_ptr;
+        }
                 
         else // 위 케이스에 모두 해당되지 않아, 결국 malloc을 해야 하는 경우
         {
@@ -275,13 +355,93 @@ void *mm_realloc(void *ptr, size_t size) // 재할당
             return newptr; // 새롭게 할당된 주소의 포인터를 반환
         }
     }
+#endif
+
+#ifdef Segmented_free_list
+    if (ptr == NULL) // 입력 포인터가 NULL이면, 입력 사이즈만큼 새롭게 할당 (예외처리)
+    {
+        return mm_malloc(size);
+    }
+    
+    if (size == 0) // 입력 사이즈가 0이면, 입력 포인터의 블록을 해제 (예외처리)
+    {
+        mm_free(ptr);
+        return NULL;
+    }
+
+    void *oldptr = ptr;
+    size_t copySize = GET_SIZE(HDRP(oldptr)); // 재할당하려는 블록의 사이즈
+    
+    if (size + DSIZE <= copySize) // (재할당 하려는 블록 사이즈 + 8 bytes(Header + Footer)) <= 현재 블록 사이즈
+    {
+        return oldptr; // 현재 블록에 재할당해도 문제 없기 때문에, 포인터만 반환
+    }
+    else // (재할당 하려는 블록 사이즈 + 8 bytes) > 현재 블록 사이즈
+         // 경우에 따라서 인접 Free block을 활용하는 방안과, 새롭게 할당하는 방안을 이용해야 함
+    {
+        size_t next_size = copySize + GET_SIZE(HDRP(NEXT_BLKP(oldptr))); // 현재 블록 사이즈 + 다음 블록 사이즈 = next_size
+        // size_t prev_size = copySize + GET_SIZE(HDRP(PREV_BLKP(oldptr))); // 이전 블록 사이즈
+
+        if (!GET_ALLOC(HDRP(NEXT_BLKP(oldptr))) && (size + DSIZE <= next_size)) 
+        // 다음 블록이 Free block이고, (재할당 하려는 블록의 사이즈 + 8 bytes) <= (현재 블록 사이즈 + 다음 블록 사이즈)
+        // 현재 블록과 다음 블록을 하나의 블록으로 취급해도 크기의 문제가 발생하지 않음
+        // malloc을 하지 않아도 됨 -> 메모리 공간 및 시간적 이득을 얻을 수 있음
+        {
+            delete_SFL(NEXT_BLKP(oldptr));
+            PUT(HDRP(oldptr), PACK(next_size, 1)); // 현재 블록의 Header Block에, (현재 블록 사이즈 + 다음 블록 사이즈) 크기와 Allocated 상태 기입
+            PUT(FTRP(oldptr), PACK(next_size, 1)); // 현재 블록의 Footer Block에, (현재 블록 사이즈 + 다음 블록 사이즈) 크기와 Allocated 상태 기입
+            return oldptr;  
+        }
+        // else if (!GET_ALLOC(HDRP(PREV_BLKP(oldptr))) && (size + DSIZE <= prev_size))
+        // // 이전 블록이 Free block이고, (재할당 하려는 블록의 사이즈 + 8 bytes) <= (이전 블록 사이즈 + 현재 블록 사이즈)
+        // // 이전 블록과 현재 블록을 하나의 블록으로 취급해도 크기의 문제가 발생하지 않음
+        // // malloc을 하지 않아도 됨 -> 메모리 공간 및 시간적 이득을 얻을 수 있음
+        // {
+        //     void *prev_ptr = PREV_BLKP(oldptr); // 이전 블록의 bp
+            
+        //     memmove(prev_ptr, oldptr, copySize); // 이전 블록의 bp로 현재 block의 메모리 영역을 옮긴다
+        //     delete_SFL(oldptr);
+        //     PUT(HDRP(prev_ptr), PACK(prev_size, 1)); // 이전 블록의 Header Block에, (이전 블록 사이즈 + 현재 블록 사이즈) 크기와 Allocated 상태 기입
+        //     PUT(FTRP(prev_ptr), PACK(prev_size, 1)); // 이전 블록의 Footer Block에, (이전 블록 사이즈 + 현재 블록 사이즈) 크기와 Allocated 상태 기입
+        //     return prev_ptr;
+        // }
+        // else if (!GET_ALLOC(HDRP(NEXT_BLKP(oldptr))) && !GET_ALLOC(HDRP(PREV_BLKP(oldptr))) && (size + DSIZE <= next_size + copySize + prev_size))
+        // // 이전 블록과 다음 블록이 모두 Free block, (재할당 하려는 블록의 사이즈 + 8 bytes) <= (이전 블록 사이즈 + 현재 블록 사이즈 + 다음 블록 사이즈)
+        // // 이전 블록과 현재 블록과 다음 블록을 하나의 블록으로 취급해도 크기의 문제가 발생하지 않음
+        // // malloc을 하지 않아도 됨 -> 메모리 공간 및 시간적 이득을 어등ㄹ 수 있음
+        // {
+        //     void *prev_ptr = PREV_BLKP(oldptr); // 이전 블록의 bp
+
+        //     memmove(prev_ptr, oldptr, copySize); // 이전 블록의 bp로 현재 block의 메모리 영역을 옮긴다
+        //     delete_SFL(oldptr);
+        //     delete_SFL(NEXT_BLKP(oldptr));
+        //     PUT(HDRP(prev_ptr), PACK(prev_size + copySize + next_size, 1)); // 이전 블록의 Header Block에, (이전 블록 사이즈 + 현재 블록 사이즈 + 다음 블록 사이즈) 크기와 Allocated 상태 기입
+        //     PUT(FTRP(prev_ptr), PACK(prev_size + copySize + next_size, 1)); // 이전 블록의 Footer Block에, (이전 블록 사이즈 + 현재 블록 사이즈 + 다음 블록 사이즈) 크기와 Allocated 상태 기입
+        //     return prev_ptr;
+        // }
+                
+        else // 위 케이스에 모두 해당되지 않아, 결국 malloc을 해야 하는 경우
+        {
+            void *newptr = mm_malloc(size + DSIZE); // (할당하려는 크기 + 8 bytes)만큼 새롭게 할당
+            if (newptr == NULL) // 새로 할당한 주소가 NULL일 경우 (예외처리)
+            {
+                return NULL;
+            }
+            memmove(newptr, oldptr, size + DSIZE); // payload 복사
+            mm_free(oldptr); // 기존의 블록은 Free block으로 바꾼다
+            return newptr; // 새롭게 할당된 주소의 포인터를 반환
+        }
+    }
+#endif
 }
+
 
 /*
 * place
 */
 static void place(void *bp, size_t asize) // 배치 및 분할
 {
+#ifndef Segmented_free_list    
     size_t csize = GET_SIZE(HDRP(bp)); // 입력 포인터가 위치한 블록 사이즈 설정
 
     if ((csize - asize) >= (2 * DSIZE)) // (블록 사이즈 - 조정할 사이즈)가 16 bytes보다 같거나 클 경우
@@ -299,14 +459,37 @@ static void place(void *bp, size_t asize) // 배치 및 분할
         PUT(HDRP(bp), PACK(csize, 1)); // 입력 포인터가 위치한 블록의 Header block에 [블록 사이즈 - 조정할 사이즈, Allocated] 상태 기입
         PUT(FTRP(bp), PACK(csize, 1)); // 입력 포인터가 위치한 블록의 Footer block에 [블록 사이즈 - 조정할 사이즈, Allocated] 상태 기입
     }
+#endif
+
+#ifdef Segmented_free_list
+    size_t csize = GET_SIZE(HDRP(bp)); // 입력 포인터가 위치한 블록 사이즈 설정
+    delete_SFL(bp);
+
+    if ((csize - asize) >= (2 * DSIZE)) // (블록 사이즈 - 조정할 사이즈)가 16 bytes보다 같거나 클 경우
+                                        // 할당 하고도 공간이 남으니, 분할 작업이 이루어진다
+    {
+        PUT(HDRP(bp), PACK(asize, 1)); // 입력 포인터가 위치한 블록의 Header block에 [조정할 사이즈, Allocated] 상태 기입
+        PUT(FTRP(bp), PACK(asize, 1)); // 입력 포인터가 위치한 블록의 Footer block에 [조정할 사이즈, Allocated] 상태 기입
+        bp = NEXT_BLKP(bp); // 입력 포인터가 위치한 블록의 다음 블록으로 포인터 변경
+        PUT(HDRP(bp), PACK(csize - asize, 0)); // 입력 포인터가 위치한 블록의 Header block에 [블록 사이즈 - 조정할 사이즈, Free] 상태 기입
+        PUT(FTRP(bp), PACK(csize - asize, 0)); // 입력 포인터가 위치한 블록의 Footer block에 [블록 사이즈 - 조정할 사이즈, Free] 상태 기입
+        coalesce(bp);
+    }
+    else // (블록 사이즈 - 조정할 사이즈)가 16 bytes보다 작을 경우
+         // 분할작업 X
+    {
+        PUT(HDRP(bp), PACK(csize, 1)); // 입력 포인터가 위치한 블록의 Header block에 [블록 사이즈 - 조정할 사이즈, Allocated] 상태 기입
+        PUT(FTRP(bp), PACK(csize, 1)); // 입력 포인터가 위치한 블록의 Footer block에 [블록 사이즈 - 조정할 사이즈, Allocated] 상태 기입
+    }
+#endif
 }
 
 /* 
 * find_fit - first fit
 * 요청이 들어오면, 처음부터 계속해서 탐색
 */
-// #ifdef 사용으로, FIT 방식을 define하여 선택
-#ifdef FIRST_FIT 
+// #if_def 사용으로, FIT 방식을 define하여 선택
+#ifdef FIRST_FIT_IMPLICIT 
 // 힙의 첫 주소부터 탐색하며 할당 가능한 블록을 찾는 방식
 static void *find_fit(size_t asize)
 {
@@ -331,7 +514,7 @@ static void *find_fit(size_t asize)
 * find_fit - next fit
 * 요청이 들어오면, 이전에 탐색했던 블록 이후부터 탐색
 */
-#ifdef NEXT_FIT
+#ifdef NEXT_FIT_IMPLICIT
 // 최근에 할당이 이루어진 위치 이후로 탐색
 static void *find_fit(size_t asize)
 {
@@ -353,10 +536,11 @@ static void *find_fit(size_t asize)
 }
 #endif
 
+
 /*
 * find_fit - best fit
 */
-#ifdef BEST_FIT
+#ifdef BEST_FIT_IMPLICIT
 static void *find_fit(size_t asize)
 {
     void *bp;
@@ -374,5 +558,95 @@ static void *find_fit(size_t asize)
     }
 
     return bestp;
+}
+#endif
+
+#ifdef FIRST_FIT_SFL
+static void *find_fit(size_t asize)
+{
+    int index = find_index(asize);
+
+    for (int i = index; i <= SFLsize; i++)
+    {
+        for (void *bp = SFL[i]; bp != NULL; bp = NEXT_FREE(bp))
+        {
+            if (asize <= GET_SIZE(HDRP(bp)))
+            {
+                return bp;
+            }
+        }
+    }
+    return NULL;
+}
+#endif
+
+#ifdef Segmented_free_list
+/*
+* insert_SFL - SFL의 앞부터 Free block 추가 (LIFO)
+*/
+static void insert_SFL(void* bp)
+{
+    int index = find_index(GET_SIZE(HDRP(bp)));
+
+    if (SFL[index] == NULL)
+    {
+        PREV_FREE(bp) = NULL;
+        NEXT_FREE(bp) = NULL;
+    }
+    else
+    {
+        PREV_FREE(bp) = NULL;
+        NEXT_FREE(bp) = SFL[index];
+        PREV_FREE(SFL[index]) = bp;
+    }
+    SFL[index] = bp;
+}
+
+/*
+* find_index - SFL 내에 적합한 사이즈 검색
+*/
+static int find_index(size_t size)
+{
+    int index = 0;
+
+    while ((index < SFLsize - 1) && (size > 1))
+    {
+        size >>= 1;
+        index++;
+    }
+    return index;
+}
+
+/*
+* delete_SFL - SFL 내부에 존재하던 Free block을 특정 이유로 인해 제거
+*/
+static void delete_SFL(void *bp)
+{
+    int index = find_index(GET_SIZE(HDRP(bp)));
+
+    if (SFL[index] == bp)
+    {
+        if (NEXT_FREE(bp) == NULL)
+        {
+            SFL[index] = NULL;
+        }
+        else
+        {
+            PREV_FREE(NEXT_FREE(bp)) = NULL;
+            SFL[index] = NEXT_FREE(bp);
+        }
+    }
+    else
+    {
+        if (NEXT_FREE(bp) != NULL)
+        {
+            PREV_FREE(NEXT_FREE(bp)) = PREV_FREE(bp);
+            NEXT_FREE(PREV_FREE(bp)) = NEXT_FREE(bp);
+        }
+        else
+        {
+            NEXT_FREE(PREV_FREE(bp)) = NULL;
+        }
+    }
 }
 #endif

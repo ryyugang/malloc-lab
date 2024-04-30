@@ -6,8 +6,12 @@ extern void *mm_malloc (size_t size);
 extern void mm_free (void *ptr);
 static void *coalesce (void *bp);
 extern void *mm_realloc(void *ptr, size_t size);
-static void *find_fit(size_t size);
+static void *find_fit(size_t asize);
 static void place(void *bp, size_t asize);
+
+static void delete_SFL(void *bp);
+static int find_index(size_t size);
+static void insert_SFL(void* bp);
 
 /* MY MACRO */
 #define WSIZE 4 // word & header/footer size 4 bytes
@@ -23,12 +27,21 @@ static void place(void *bp, size_t asize);
 #define GET_ALLOC(p) (GET(p) & 0x1) // allocated fields from address p
 #define HDRP(bp) ((char *)(bp) - WSIZE) // compute address of its header
 #define FTRP(bp) ((char *)(bp) + GET_SIZE(HDRP(bp)) - DSIZE) // compute address of its footer
+
 #define NEXT_BLKP(bp) ((char *)(bp) + GET_SIZE(((char *)(bp) - WSIZE))) // compute address of next block
 #define PREV_BLKP(bp) ((char *)(bp) - GET_SIZE(((char *)(bp) - DSIZE))) // compute address of previous block
 
-// #define FIRST_FIT
-#define NEXT_FIT
-// #define BEST_FIT
+// #define FIRST_FIT_IMPLICIT
+// #define NEXT_FIT_IMPLICIT
+// #define BEST_FIT_IMPLICIT
+#define FIRST_FIT_SFL
+
+#define Segmented_free_list
+#ifdef Segmented_free_list
+#define SFLsize 20 // segmented list 최대 사이즈를 2**20 설정
+#define PREV_FREE(bp) (*(char**)(bp)) // free list의 이전 블록 포인터
+#define NEXT_FREE(bp) (*(char**)(bp + WSIZE)) // free list의 다음 블록 포인터
+#endif
 
 /* 
  * Students work in teams of one or two.  Teams enter their team name, 
