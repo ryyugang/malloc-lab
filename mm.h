@@ -34,7 +34,9 @@ static void insert_SFL(void* bp);
 // #define FIRST_FIT_IMPLICIT
 // #define NEXT_FIT_IMPLICIT
 // #define BEST_FIT_IMPLICIT
-#define FIRST_FIT_SFL
+
+// #define FIRST_FIT_SFL
+#define BEST_FIT_SFL
 
 #define Segmented_free_list
 #ifdef Segmented_free_list
