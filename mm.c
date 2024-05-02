@@ -155,29 +155,29 @@ void *mm_malloc(size_t size)
 #endif
 
 #ifdef Segmented_free_list
-    size_t asize;
+    size_t asize; // 할당을 위해 조절할 사이즈
     size_t extendsize;
     char *bp;
 
-    if (size == 0)
+    if (size == 0) // 할당하려는 크기가 0이면
     {
         return NULL;
     }
 
-    asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE);
-    if ((bp = find_fit(asize)) != NULL)
+    asize = DSIZE * ((size + (DSIZE) + (DSIZE - 1)) / DSIZE); // 할당 사이즈 : 정렬을 위해 정수의 배수로 조정
+    if ((bp = find_fit(asize)) != NULL) // 할당 위치를 찾았다면
     {
-        place(bp, asize);
+        place(bp, asize); // 할당
         return bp;
     }
 
-    extendsize = MAX(asize,CHUNKSIZE);
-    if ((bp = extend_heap(extendsize/WSIZE)) == NULL)
+    extendsize = MAX(asize,CHUNKSIZE); // 할당 위치를 찾지 못했다면
+    if ((bp = extend_heap(extendsize/WSIZE)) == NULL) // 더 이상 확장이 불가능 하다면
     {
         return NULL;
     }
 
-    place(bp, asize);
+    place(bp, asize); // 할당
     return bp;
 #endif
 }
@@ -240,13 +240,13 @@ static void *coalesce (void *bp) // 분할되어있는 Free block을 병합하�
 #ifdef Segmented_free_list
     if (prev_alloc && next_alloc) // case1 : 이전, 다음 블록 allocated
     {
-        insert_SFL(bp);
+        insert_SFL(bp); // Free 한 현재 블록을 SFL에 삽입
         return bp; // 병합이 불가능하니, 현재 포인터만 반환
     }
 
     else if (prev_alloc && !next_alloc) // case2 : 이전 블록 allocated, 다음 블록 free
     {
-        delete_SFL(NEXT_BLKP(bp));
+        delete_SFL(NEXT_BLKP(bp)); // 다음 Free block을 일단 SFL에서 삭제 (새로 사이즈 늘려서 넣을거니까)
         size += GET_SIZE(HDRP(NEXT_BLKP(bp))); // 다음 블록의 사이즈만큼 더해줌
         PUT(HDRP(bp), PACK(size, 0)); // 현재 블록의 Header block에, Free block의 상태로 기입
         PUT(FTRP(bp), PACK(size, 0)); // 현재 블록의 Footer block에, Free block의 상태로 기입
@@ -254,7 +254,7 @@ static void *coalesce (void *bp) // 분할되어있는 Free block을 병합하�
 
     else if (!prev_alloc && next_alloc) // case3 : 이전 블록 free, 다음 블록 allocated
     {
-        delete_SFL(PREV_BLKP(bp));
+        delete_SFL(PREV_BLKP(bp)); // 이전 Free block을 일단 SFL에서 삭제 (새로 사이즈 늘려서 넣을거니까)
         size += GET_SIZE(HDRP(PREV_BLKP(bp))); // 이전 블록 사이즈만큼 더해줌
         PUT(FTRP(bp), PACK(size, 0)); // 현재 블록의 Footer block에, Free block의 상태로 기입
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0)); // 이전 블록의 Header block에, Free block의 상태로 기입
@@ -263,8 +263,8 @@ static void *coalesce (void *bp) // 분할되어있는 Free block을 병합하�
 
     else // case4 : 이전 블록 free, 다음 블록 free
     {
-        delete_SFL(NEXT_BLKP(bp));
-        delete_SFL(PREV_BLKP(bp));
+        delete_SFL(NEXT_BLKP(bp)); // 이전 Free block을 일단 SFL에서 삭제 (새로 사이즈 늘려서 넣을거니까)
+        delete_SFL(PREV_BLKP(bp)); // 다음 Free block을 일단 SFL에서 삭제 (새로 사이즈 늘려서 넣을거니까)
         size += GET_SIZE(HDRP(PREV_BLKP(bp))) + GET_SIZE(FTRP(NEXT_BLKP(bp))); // 이전 + 다음 블록 사이즈만큼 더해줌
         PUT(HDRP(PREV_BLKP(bp)), PACK(size, 0)); // 현재 블록의 Header block에, Free block의 상태로 기입
         PUT(FTRP(NEXT_BLKP(bp)), PACK(size, 0)); // 다음 블록의 Footer block에, Free block의 상태로 기입
@@ -349,7 +349,7 @@ void *mm_realloc(void *ptr, size_t size) // 재할당
             {
                 return NULL;
             }
-            memmove(newptr, oldptr, size + DSIZE); // payload 복사
+            memcpy(newptr, oldptr, size + DSIZE); // payload 복사
             lastp = newptr; // next_fit 사용을 위한 포인터 동기화
             mm_free(oldptr); // 기존의 블록은 Free block으로 바꾼다
             return newptr; // 새롭게 할당된 주소의 포인터를 반환
@@ -380,7 +380,6 @@ void *mm_realloc(void *ptr, size_t size) // 재할당
          // 경우에 따라서 인접 Free block을 활용하는 방안과, 새롭게 할당하는 방안을 이용해야 함
     {
         size_t next_size = copySize + GET_SIZE(HDRP(NEXT_BLKP(oldptr))); // 현재 블록 사이즈 + 다음 블록 사이즈 = next_size
-        size_t prev_size = copySize + GET_SIZE(HDRP(PREV_BLKP(oldptr))); // 이전 블록 사이즈
 
         if (!GET_ALLOC(HDRP(NEXT_BLKP(oldptr))) && (size + DSIZE <= next_size)) 
         // 다음 블록이 Free block이고, (재할당 하려는 블록의 사이즈 + 8 bytes) <= (현재 블록 사이즈 + 다음 블록 사이즈)
@@ -445,7 +444,7 @@ static void place(void *bp, size_t asize) // 배치 및 분할
         bp = NEXT_BLKP(bp); // 입력 포인터가 위치한 블록의 다음 블록으로 포인터 변경
         PUT(HDRP(bp), PACK(csize - asize, 0)); // 입력 포인터가 위치한 블록의 Header block에 [블록 사이즈 - 조정할 사이즈, Free] 상태 기입
         PUT(FTRP(bp), PACK(csize - asize, 0)); // 입력 포인터가 위치한 블록의 Footer block에 [블록 사이즈 - 조정할 사이즈, Free] 상태 기입
-        coalesce(bp);
+        insert_SFL(bp);
     }
     else // (블록 사이즈 - 조정할 사이즈)가 16 bytes보다 작을 경우
          // 분할작업 X
